@@ -9,7 +9,8 @@ from dotenv import load_dotenv
 from pathlib import Path
 import os
 import ast
-import re
+import sys
+from tabulate import tabulate
 
 ####### Setup Division #######
 env_path = Path('.') / '.env'
@@ -73,7 +74,6 @@ class Chakra():
         follower_friends = []
         # index = 0
         for follow_obj in tweepy.Cursor(self.api.followers, id=user_id).items():
-            print(follow_obj._json["id"])
             follower_id.append(follow_obj._json["id"])
             follower_name.append(follow_obj._json["name"])
             follower_followers.append(follow_obj._json["followers_count"])
@@ -155,7 +155,6 @@ class Campaign():
         doc["message"] = message
         elem = self.collection.find({}, {"name": name})
         x = self.collection.insert_one(doc)
-        print(x)
         
     def start_campaign(self, id):
         count = self.collection.count_documents({ "id": id })
@@ -170,97 +169,191 @@ class Campaign():
     def truncate(self):
         self.collection.drop()
 
+    def delete(self, id):
+        self.collection.delete_one({ "id": id })
+
     def list_all(self):
         l = self.collection.find({}, { "_id": 0, "id": 1, "name": 1, "strategy": 1, "started": 1, "message": 1 })
         return l
 
     def get_campaign(self, id):
-        c = self.collection.find_one({ "id": id }, { "_id": 0, "followers": 1, "started": 1, "message": 1 })
+        c = self.collection.find_one({ "id": id })
         return c
 
     def mark_sent(self, cid, uid):
         self.collection.update_one( { "id": cid, "followers.id": uid }, { "$set": { "followers.$.sent": True } } )
 
+    def id_exists(self, id):
+        count = self.collection.count_documents({ "id": id })
+        return (count >= 1)
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(prog="Twitter Campaigns CLI")
+    parser.add_argument("-f", "--format", help="Output format", default="human")
+
+    subparsers = parser.add_subparsers(help='sub-command help', dest="command")
+
+    add_parser = subparsers.add_parser('add', help="Add New Campaign")
+    add_parser.add_argument("-n", "--name", help="Campaign name", required=True)
+    add_parser.add_argument("-s", "--strategy_type", help="Strategy type", required=True)
+    add_parser.add_argument("-i", "--id", help="Unique ID", required=True)
+    add_parser.add_argument("-m", "--message", help="message template", required=True)
+
+    start_parser = subparsers.add_parser('start', help="Start a Campaign")
+    start_parser.add_argument("-i", "--id", help="Campaign ID")
+
+    status_parser = subparsers.add_parser('status', help="Status of a Campaign")
+    status_parser.add_argument("-i", "--id", help="Campaign ID")
+
+    delete_parser = subparsers.add_parser('delete', help="Delete a (or all) Campaign(s)")
+    delete_parser.add_argument("-i", "--id", help="Campaign ID")
+    delete_parser.add_argument("-a", "--all", help="Delete all campaigns", action="store_true")
+
+    dm_parser = subparsers.add_parser('dm', help="Direct message for a campaign")
+    dm_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
+    dm_parser.add_argument("-r", "--recipients", help="recipients", default="all")
+    dm_parser.add_argument("-d", "--daemonize", help="Daemonize DM Loop", action="store_true", default=False)
+
+    list_parser = subparsers.add_parser("list", help="List all campaigns")
+
+    return parser.parse_args()
+
+def pretty_print_list(campaigns):
+
+    data = [ (i["id"], i["name"], i["strategy"], i["started"], i["message"], ) for i in campaigns]
+    print(tabulate(data, headers=["Id", "Campaign Name", "Strategy", "Started", "Message Template"]))
+    print()
+    print("Fetched {} campaigns".format(len(data)))
+
+def pretty_print_status(cp, status):
+
+    print("Campaign Name: ", cp["name"])
+    print("Active: ", cp["started"])
+    print("Status: ", status["sent"], "/", status["total"], "(Completed)" if status["total"] == status["sent"] else "")
+
     
 if __name__ == "__main__":
+    arguments = parse_arguments()
+    command  = arguments.command
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-n", "--campaign_name", help="Campaign name")
-    parser.add_argument("-s", "--strategy_type", help="Strategy type")
-    parser.add_argument("-i", "--id", help="Unique ID")
-    parser.add_argument("-m", "--message", help="message template")
-    parser.add_argument("-r", "--recipients", help="recipients")
-    
-    parser.add_argument("-A", "--add", action='store_true')
-    parser.add_argument("-S", "--start", action='store_true')
-    parser.add_argument("-R", "--run", action='store_true')
-    parser.add_argument("-T", "--status", action='store_true')
-    parser.add_argument("-DA", "--delete_all", action='store_true')
-    parser.add_argument("-L", "--list", action='store_true')
-    parser.add_argument("-DM", "--direct_message", action='store_true')
-    arguments = parser.parse_args()
-    
-    # initialize the Chakra engine
-    chakraInstance = Chakra(auth)
-
-    # Initialize the Campaign model
     campaign = Campaign(db, campaignCollection)
+    chakraInstance = Chakra(auth)
+    pp = not (arguments.format and arguments.format == "json")
 
-    if (arguments.add):
+    # print banner
+    if pp:
+        print("    Twitter Campaigns CLI v0.1")
+        print("    ==========================")
+        print()
+
+    if command == "add":
+        # add command
+        pp and print("[+] Authenticating.....", end='')
         me = chakraInstance.get_me()
         user_id = me["id"]
-        if (arguments.campaign_name and arguments.strategy_type and arguments.id and arguments.message):
-            if arguments.strategy_type == STRATEGY_TWEETS:
-                followers = chakraInstance.get_ranks_from_retweets(user_id)
-                campaign.create_new_campaign(arguments.id, arguments.campaign_name, arguments.strategy_type, followers, False, arguments.message)
-            elif arguments.strategy_type == STRATEGY_FOLLOWERS:
-                followers = chakraInstance.get_ranks_from_follower_followers(user_id)
-                print(followers)
-                # followers = []
-                campaign.create_new_campaign(arguments.id, arguments.campaign_name, arguments.strategy_type, followers, False, arguments.message)
-            elif arguments.strategy_type == STRATEGY_FRIENDS:
-                followers = chakraInstance.get_ranks_from_follower_friends(user_id)
-                campaign.create_new_campaign(arguments.id, arguments.campaign_name, arguments.strategy_type, followers, False, arguments.message)
+        print("Authenticated as", me["name"])
+
+        print("[+] Making a new campaign with name `{}` and id `{}`".format(arguments.name, arguments.id))
+
+        if (campaign.id_exists(arguments.id)):
+            pp and print("[!] Campaign with same ID already exists")
+            pp and print("[!] Failure")
+            exit(1)
+
+        # TODO: Check if same id exists
+
+        if arguments.strategy_type == STRATEGY_TWEETS:
+            pp and print("[+] Strategy set to 'User with most retweets first'")
+            pp and print("[+] Fetching followers.....", end='')
+            followers = chakraInstance.get_ranks_from_retweets(user_id)
+            pp and print("fetched {} followers".format(len(followers)))
+            campaign.create_new_campaign(arguments.id, arguments.name, arguments.strategy_type, followers, False, arguments.message)
+            pp and print("[+] Success")
+        elif arguments.strategy_type == STRATEGY_FOLLOWERS:
+            pp and print("[+] Strategy set to 'User with most followers first'")
+            pp and print("[+] Fetching followers.....", end='')
+            followers = chakraInstance.get_ranks_from_follower_followers(user_id)
+            pp and print("fetched {} followers".format(len(followers)))
+            campaign.create_new_campaign(arguments.id, arguments.name, arguments.strategy_type, followers, False, arguments.message)
+            pp and print("[+] Success")
+        elif arguments.strategy_type == STRATEGY_FRIENDS:
+            pp and print("[+] Strategy set to 'User with most friends first'")
+            pp and print("[+] Fetching followers.....", end='')
+            followers = chakraInstance.get_ranks_from_follower_friends(user_id)
+            pp and print("fetched {} followers".format(len(followers)))
+            campaign.create_new_campaign(arguments.id, arguments.name, arguments.strategy_type, followers, False, arguments.message)
+            pp and print("[+] Success")
+        else:
+            pp and print("invalid strategy")
+
+    elif command == "start":
+        # TODO: This is just an alias for daemonized DM Loop with check for campaign if its still active
+        pass
+
+    elif command == "status":
+        # status command
+        status = campaign.get_status(arguments.id)
+        if not pp:
+            print(status)
+        else:
+            cp = campaign.get_campaign(arguments.id)
+            pretty_print_status(cp, status)
+
+    elif command == "delete":
+        # delete command
+        if arguments.id:
+            if (campaign.id_exists(arguments.id)):
+                print("[+] Deleting campaign with id", campaign.id)
+                campaign.delete(arguments.id)
+                print("[+] Success")
             else:
-                print("invalid strategy")
+                pp and print("[!] No such campaign exists")
+                exit(1)
+
+        elif arguments.all:
+            pp and print("[+] Deleting all campaigns....")
+            campaign.truncate()
+            pp and print("[+] Success")
+
         else:
-            print("inavlid input")
+            print("[!] Specify either id of campaign or `-a` to delete all campaigns")
+            exit(1)
 
-    if (arguments.start):
-        if (arguments.id):
-            campaign.start_campaign(arguments.id)
-        else:
-            print("invalid input")
+    elif command == "dm":
+        if not (campaign.id_exists(arguments.id)):
+            pp and print("[!] No such campaign exists!")
+            exit(1)
 
-    if (arguments.status):
-        if (arguments.id):
-            print(campaign.get_status(arguments.id))
-        else:
-            print("invalid input")
+        cp = campaign.get_campaign(arguments.id)
+        pp and print("[+] Starting campaign `{}`".format(cp["name"]))
 
-    if (arguments.delete_all):
-        campaign.truncate()
-
-    if (arguments.list):
-        print([i for i in campaign.list_all()])
-
-    if (arguments.direct_message):
-        if (arguments.recipients and arguments.id):
-            cp = campaign.get_campaign(arguments.id)
-            recipients = ast.literal_eval(arguments.recipients)
-            for r in recipients:
-                user = chakraInstance.get_user_json(r)
-                print(interpolate(cp["message"], user))
-                chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
-                campaign.mark_sent(arguments.id, user["id"])
-        elif (arguments.id):
-            cp = campaign.get_campaign(arguments.id)
+        # TODO: Daemonize loop
+        if (arguments.recipients == "all"):
             recipients = cp["followers"]
             for r in recipients:
                 if r["sent"] == False:
                     user = chakraInstance.get_user_json(r["id"])
                     chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
                     campaign.mark_sent(arguments.id, user["id"])
-            pass
         else:
-            print("invalid input")
+            recipients = ast.literal_eval(arguments.recipients)
+            for r in recipients:
+                user = chakraInstance.get_user_json(r)
+                chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
+                campaign.mark_sent(arguments.id, user["id"])
+
+        pp and (not arguments.daemonize) and print("[+] Success")
+
+    elif command == "list":
+        # list command
+        all_campaigns = [i for i in campaign.list_all()]
+        if not pp:
+            print(all_campaigns)
+        else:
+            pretty_print_list(all_campaigns)
+
+    else:
+        print("[!] No command specified")
+
+
+    sys.exit(0)
