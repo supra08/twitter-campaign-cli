@@ -11,6 +11,7 @@ import os
 import ast
 import sys
 from tabulate import tabulate
+import time
 
 ####### Setup Division #######
 env_path = Path('.') / '.env'
@@ -161,6 +162,15 @@ class Campaign():
         if count > 0:
             self.collection.update_one({ "id": id }, { "$set": { "started": True }})
 
+    def stop_campaign(self, id):
+        count = self.collection.count_documents({ "id": id })
+        if count > 0:
+            self.collection.update_one({ "id": id }, { "$set": { "started": False }})
+
+    def is_started(self, id):
+        l = self.collection.find_one({"id": id}, { "started": 1 })
+        return l["started"]
+
     def get_status(self, id):
         cp = self.collection.find_one({ "id": id })
         count = sum(1 for i in cp["followers"] if i["sent"])
@@ -186,6 +196,9 @@ class Campaign():
     def id_exists(self, id):
         count = self.collection.count_documents({ "id": id })
         return (count >= 1)
+
+    def reset_sent(self, id):
+        self.collection.update_many( { "id": id }, { "$set": { "followers.$[].sent": False } } )
 
 def parse_arguments():
     parser = argparse.ArgumentParser(prog="Twitter Campaigns CLI")
@@ -215,6 +228,12 @@ def parse_arguments():
     dm_parser.add_argument("-d", "--daemonize", help="Daemonize DM Loop", action="store_true", default=False)
 
     list_parser = subparsers.add_parser("list", help="List all campaigns")
+
+    reset_parser = subparsers.add_parser('reset', help="Reset a campaign")
+    reset_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
+
+    stop_parser = subparsers.add_parser('stop', help="Stop a campaign")
+    stop_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
 
     return parser.parse_args()
 
@@ -288,7 +307,36 @@ if __name__ == "__main__":
 
     elif command == "start":
         # TODO: This is just an alias for daemonized DM Loop with check for campaign if its still active
-        pass
+        if not (campaign.id_exists(arguments.id)):
+            pp and print("[!] No such campaign exists!")
+            exit(1)
+
+        cp = campaign.get_campaign(arguments.id)
+        campaign.start_campaign(arguments.id)
+        pp and print("[+] Starting campaign `{}`".format(cp["name"]))
+
+        n = os.fork()
+        if n == 0 and pp:
+            print("[+] Daemonized with PID", os.getpid())
+        elif pp:
+            print("[+] Success")
+
+        if n == 0:
+            # pymongo is fork-unsafe
+            mongoClient = pymongo.MongoClient("mongodb://localhost:27017/")
+            db = mongoClient[DB_NAME]
+            campaignCollection = db[COLLECTION_NAME]
+            campaign = Campaign(db, campaignCollection)
+
+            recipients = cp["followers"]
+            for r in recipients:
+                if not campaign.is_started(cp["id"]):
+                    exit(0)
+
+                if r["sent"] == False:
+                    user = chakraInstance.get_user_json(r["id"])
+                    chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
+                    campaign.mark_sent(arguments.id, user["id"])
 
     elif command == "status":
         # status command
@@ -325,24 +373,47 @@ if __name__ == "__main__":
             exit(1)
 
         cp = campaign.get_campaign(arguments.id)
+        campaign.start_campaign(arguments.id)
         pp and print("[+] Starting campaign `{}`".format(cp["name"]))
 
-        # TODO: Daemonize loop
-        if (arguments.recipients == "all"):
-            recipients = cp["followers"]
-            for r in recipients:
-                if r["sent"] == False:
-                    user = chakraInstance.get_user_json(r["id"])
+        n = 0
+        if arguments.daemonize:
+            n = os.fork()
+            if n == 0 and pp:
+                print("[+] Daemonized with PID", os.getpid())
+            elif pp:
+                print("[+] Success")
+
+
+        if n == 0:
+            # pymongo is fork-unsafe
+            mongoClient = pymongo.MongoClient("mongodb://localhost:27017/")
+            db = mongoClient[DB_NAME]
+            campaignCollection = db[COLLECTION_NAME]
+            campaign = Campaign(db, campaignCollection)
+
+            if (arguments.recipients == "all"):
+                recipients = cp["followers"]
+                for r in recipients:
+                    if not campaign.is_started(cp["id"]):
+                        exit(0)
+
+                    if r["sent"] == False:
+                        user = chakraInstance.get_user_json(r["id"])
+                        chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
+                        campaign.mark_sent(arguments.id, user["id"])
+            else:
+                recipients = ast.literal_eval(arguments.recipients)
+                for r in recipients:
+                    if not campaign.is_started(cp["id"]):
+                        exit(0)
+           
+                    user = chakraInstance.get_user_json(r)
                     chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
                     campaign.mark_sent(arguments.id, user["id"])
-        else:
-            recipients = ast.literal_eval(arguments.recipients)
-            for r in recipients:
-                user = chakraInstance.get_user_json(r)
-                chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
-                campaign.mark_sent(arguments.id, user["id"])
 
-        pp and (not arguments.daemonize) and print("[+] Success")
+        if not arguments.daemonize:
+            print("[+] Success")
 
     elif command == "list":
         # list command
@@ -352,8 +423,24 @@ if __name__ == "__main__":
         else:
             pretty_print_list(all_campaigns)
 
+    elif command == "reset":
+        if not (campaign.id_exists(arguments.id)):
+            pp and print("[!] No such campaign exists!")
+            exit(1)
+
+        campaign.reset_sent(arguments.id)
+        pp and print("[+] Success")
+
+    elif command == "stop":
+        if not (campaign.id_exists(arguments.id)):
+            pp and print("[!] No such campaign exists!")
+            exit(1)
+
+        campaign.stop_campaign(arguments.id)
+
     else:
         print("[!] No command specified")
+        exit(1)
 
 
     sys.exit(0)
