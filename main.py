@@ -8,7 +8,8 @@ from dateutil.parser import parse
 from dotenv import load_dotenv
 from pathlib import Path
 import os
-
+import ast
+import re
 
 ####### Setup Division #######
 env_path = Path('.') / '.env'
@@ -24,7 +25,7 @@ mongoClient = pymongo.MongoClient("mongodb://localhost:27017/")
 
 # if DB_NAME not in mongoClient.list_database_names():
 db = mongoClient[DB_NAME]
-campaignCollection = db[COLLECTION_NAME] 
+campaignCollection = db[COLLECTION_NAME]
 
 
 ConsumerKey = os.getenv("ConsumerKey")
@@ -36,18 +37,27 @@ auth = tweepy.OAuthHandler(ConsumerKey, ConsumerSecret)
 auth.set_access_token(AccessKey, AccessSecret)
 ##############################
 
+def interpolate(message, user):
+    interpolated_message = message.replace('{name}', user["name"])
+    return interpolated_message
 
 class Chakra():
     
     def __init__(self, auth):
         self.api = tweepy.API(auth, wait_on_rate_limit=True,
             wait_on_rate_limit_notify=True)
+            
+    def get_me(self):
+        return self.api.me()._json
 
     def get_id(self, handle):
         return self.api.get_user(handle)._json['id']
 
     def get_user(self, user_id):
         return self.api.get_user(user_id)._json['name']
+
+    def get_user_json(self, handle):
+        return self.api.get_user(handle)._json
 
     def followers_count(self, user_obj):
         return user_obj._json["followers_count"]
@@ -63,6 +73,7 @@ class Chakra():
         follower_friends = []
         # index = 0
         for follow_obj in tweepy.Cursor(self.api.followers, id=user_id).items():
+            print(follow_obj._json["id"])
             follower_id.append(follow_obj._json["id"])
             follower_name.append(follow_obj._json["name"])
             follower_followers.append(follow_obj._json["followers_count"])
@@ -73,15 +84,13 @@ class Chakra():
         return follower_id, follower_name, follower_followers, follower_friends
 
     def get_ranks_from_follower_followers(self, user_id):
-        ranked_followers = []
         follower_ids, follower_names, follower_followers, _ = self.followers_info(user_id)
-        [ranked_followers for _,ranked_followers in sorted(zip(follower_followers,follower_ids))]
+        ranked_followers = [ { "id": fol, "sent": False } for _, fol in sorted(zip(follower_followers,follower_ids))]
         return ranked_followers
 
     def get_ranks_from_follower_friends(self, user_id):
-        ranked_followers = []
         follower_ids, follower_names, _, follower_friends = self.followers_info(user_id)
-        [ranked_followers for _,ranked_followers in sorted(zip(follower_friends,follower_ids))]
+        ranked_followers = [ { "id": fol, "sent": False } for _, fol in sorted(zip(follower_friends,follower_ids)) ]
         return ranked_followers
     
     def get_tweet_info(api, tweet_id):
@@ -136,27 +145,59 @@ class Campaign():
         self.db = db
         self.collection = collection
 
-    def create_new_campaign(self, username, name, strategy, followers):
+    def create_new_campaign(self, id, name, strategy, followers, started, message):
         doc = {}
-        doc["username"] = username
+        doc["id"] = id
         doc["name"] = name
         doc["strategy"] = strategy
         doc["followers"] = followers
+        doc["started"] = started
+        doc["message"] = message
         elem = self.collection.find({}, {"name": name})
         x = self.collection.insert_one(doc)
+        print(x)
+        
+    def start_campaign(self, id):
+        count = self.collection.count_documents({ "id": id })
+        if count > 0:
+            self.collection.update_one({ "id": id }, { "$set": { "started": True }})
+
+    def get_status(self, id):
+        cp = self.collection.find_one({ "id": id })
+        count = sum(1 for i in cp["followers"] if i["sent"])
+        return { "sent": count, "total": len(cp["followers"]) }
+
+    def truncate(self):
+        self.collection.drop()
+
+    def list_all(self):
+        l = self.collection.find({}, { "_id": 0, "id": 1, "name": 1, "strategy": 1, "started": 1, "message": 1 })
+        return l
+
+    def get_campaign(self, id):
+        c = self.collection.find_one({ "id": id }, { "_id": 0, "followers": 1, "started": 1, "message": 1 })
+        return c
+
+    def mark_sent(self, cid, uid):
+        self.collection.update_one( { "id": cid, "followers.id": uid }, { "$set": { "followers.$.sent": True } } )
+
     
 if __name__ == "__main__":
-    campaign.create_new_campaign("test", "followers")
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("-u", "--twitter_username", required=True, help="Your twitter username")
     parser.add_argument("-n", "--campaign_name", help="Campaign name")
     parser.add_argument("-s", "--strategy_type", help="Strategy type")
-    parser.add_argument("-i", action='store_true')
-    parser.add_argument("-f", action='store_true')
-    parser.add_argument("-c", action='store_true')
-    parser.add_argument("-t", action='store_true')
-    parser.add_argument("-o", action='store_true')
-    parser.add_argument("-r", action='store_true')
+    parser.add_argument("-i", "--id", help="Unique ID")
+    parser.add_argument("-m", "--message", help="message template")
+    parser.add_argument("-r", "--recipients", help="recipients")
+    
+    parser.add_argument("-A", "--add", action='store_true')
+    parser.add_argument("-S", "--start", action='store_true')
+    parser.add_argument("-R", "--run", action='store_true')
+    parser.add_argument("-T", "--status", action='store_true')
+    parser.add_argument("-DA", "--delete_all", action='store_true')
+    parser.add_argument("-L", "--list", action='store_true')
+    parser.add_argument("-DM", "--direct_message", action='store_true')
     arguments = parser.parse_args()
     
     # initialize the Chakra engine
@@ -165,35 +206,61 @@ if __name__ == "__main__":
     # Initialize the Campaign model
     campaign = Campaign(db, campaignCollection)
 
-    user_id = chakraInstance.get_id(arguments.twitter_username)
-
-    if (arguments.campaign_name):
-        if (arguments.strategy_type):
+    if (arguments.add):
+        me = chakraInstance.get_me()
+        user_id = me["id"]
+        if (arguments.campaign_name and arguments.strategy_type and arguments.id and arguments.message):
             if arguments.strategy_type == STRATEGY_TWEETS:
                 followers = chakraInstance.get_ranks_from_retweets(user_id)
-                campaign.create_new_campaign(arguments.twitter_username, arguments.campaign_name, arguments.strategy_type, followers)
-            if arguments.strategy_type == STRATEGY_FOLLOWERS:
+                campaign.create_new_campaign(arguments.id, arguments.campaign_name, arguments.strategy_type, followers, False, arguments.message)
+            elif arguments.strategy_type == STRATEGY_FOLLOWERS:
                 followers = chakraInstance.get_ranks_from_follower_followers(user_id)
-                campaign.create_new_campaign(arguments.twitter_username, arguments.campaign_name, arguments.strategy_type, followers)
-            if arguments.strategy_type == STRATEGY_FRIENDS:
+                print(followers)
+                # followers = []
+                campaign.create_new_campaign(arguments.id, arguments.campaign_name, arguments.strategy_type, followers, False, arguments.message)
+            elif arguments.strategy_type == STRATEGY_FRIENDS:
                 followers = chakraInstance.get_ranks_from_follower_friends(user_id)
-                campaign.create_new_campaign(arguments.twitter_username, arguments.campaign_name, arguments.strategy_type, followers)
+                campaign.create_new_campaign(arguments.id, arguments.campaign_name, arguments.strategy_type, followers, False, arguments.message)
+            else:
+                print("invalid strategy")
         else:
-            print("Strategy type not given")
+            print("inavlid input")
 
-    if (arguments.i):
-        print(user_id)
+    if (arguments.start):
+        if (arguments.id):
+            campaign.start_campaign(arguments.id)
+        else:
+            print("invalid input")
 
-    if (arguments.f):
-        print(chakraInstance.followers_info(user_id))
-    
-    if (arguments.c):
-        print(chakraInstance.followers_count_id(user_id))
+    if (arguments.status):
+        if (arguments.id):
+            print(campaign.get_status(arguments.id))
+        else:
+            print("invalid input")
 
-    if (arguments.t):
-        print(chakraInstance.get_ranks_from_retweets(user_id))
-    elif (arguments.o):
-        print(chakraInstance.get_ranks_from_follower_followers(user_id))
-    elif (arguments.r):
-        print(chakraInstance.get_ranks_from_follower_friends(user_id))
+    if (arguments.delete_all):
+        campaign.truncate()
 
+    if (arguments.list):
+        print([i for i in campaign.list_all()])
+
+    if (arguments.direct_message):
+        if (arguments.recipients and arguments.id):
+            cp = campaign.get_campaign(arguments.id)
+            recipients = ast.literal_eval(arguments.recipients)
+            for r in recipients:
+                user = chakraInstance.get_user_json(r)
+                print(interpolate(cp["message"], user))
+                chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
+                campaign.mark_sent(arguments.id, user["id"])
+        elif (arguments.id):
+            cp = campaign.get_campaign(arguments.id)
+            recipients = cp["followers"]
+            for r in recipients:
+                if r["sent"] == False:
+                    user = chakraInstance.get_user_json(r["id"])
+                    chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
+                    campaign.mark_sent(arguments.id, user["id"])
+            pass
+        else:
+            print("invalid input")
