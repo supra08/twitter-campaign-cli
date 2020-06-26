@@ -8,14 +8,23 @@ from dateutil.parser import parse
 from dotenv import load_dotenv
 from pathlib import Path
 import os
+import ast
+import sys
+import json
+from tabulate import tabulate
+import time
 
-
+from chakra import Chakra
+from campaign import Campaign
 ####### Setup Division #######
 env_path = Path('.') / '.env'
 load_dotenv(dotenv_path=env_path)
 
 DB_NAME = "chakra"
 COLLECTION_NAME = "campaigns"
+if os.getenv("TCGUI") == "YES":
+    COLLECTION_NAME = "campaigns-gui"
+
 STRATEGY_TWEETS = "tweet"
 STRATEGY_FRIENDS = "friend"
 STRATEGY_FOLLOWERS = "follower"
@@ -24,7 +33,7 @@ mongoClient = pymongo.MongoClient("mongodb://localhost:27017/")
 
 # if DB_NAME not in mongoClient.list_database_names():
 db = mongoClient[DB_NAME]
-campaignCollection = db[COLLECTION_NAME] 
+campaignCollection = db[COLLECTION_NAME]
 
 
 ConsumerKey = os.getenv("ConsumerKey")
@@ -36,164 +45,303 @@ auth = tweepy.OAuthHandler(ConsumerKey, ConsumerSecret)
 auth.set_access_token(AccessKey, AccessSecret)
 ##############################
 
+def interpolate(message, user):
+    interpolated_message = message.replace('{name}', user["name"])
+    return interpolated_message
 
-class Chakra():
+def parse_arguments():
+    parser = argparse.ArgumentParser(prog="Twitter Campaigns CLI")
+    parser.add_argument("-f", "--format", help="Output format", default="human")
+
+    subparsers = parser.add_subparsers(help='sub-command help', dest="command")
+
+    add_parser = subparsers.add_parser('add', help="Add New Campaign")
+    add_parser.add_argument("-n", "--name", help="Campaign name", required=True)
+    add_parser.add_argument("-s", "--strategy_type", help="Strategy type", required=True)
+    add_parser.add_argument("-i", "--id", help="Unique ID", required=True)
+    add_parser.add_argument("-m", "--message", help="message template", required=True)
+
+    start_parser = subparsers.add_parser('start', help="Start a Campaign")
+    start_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
+
+    status_parser = subparsers.add_parser('status', help="Status of a Campaign")
+    status_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
+
+    delete_parser = subparsers.add_parser('delete', help="Delete a (or all) Campaign(s)")
+    delete_parser.add_argument("-i", "--id", help="Campaign ID")
+    delete_parser.add_argument("-a", "--all", help="Delete all campaigns", action="store_true")
+
+    dm_parser = subparsers.add_parser('dm', help="Direct message for a campaign")
+    dm_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
+    dm_parser.add_argument("-r", "--recipients", help="recipients", default="all")
+    dm_parser.add_argument("-d", "--daemonize", help="Daemonize DM Loop", action="store_true", default=False)
+
+    list_parser = subparsers.add_parser("list", help="List all campaigns")
+
+    reset_parser = subparsers.add_parser('reset', help="Reset a campaign")
+    reset_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
+
+    stop_parser = subparsers.add_parser('stop', help="Stop a campaign")
+    stop_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
     
-    def __init__(self, auth):
-        self.api = tweepy.API(auth, wait_on_rate_limit=True,
-            wait_on_rate_limit_notify=True)
-
-    def get_id(self, handle):
-        return self.api.get_user(handle)._json['id']
-
-    def get_user(self, user_id):
-        return self.api.get_user(user_id)._json['name']
-
-    def followers_count(self, user_obj):
-        return user_obj._json["followers_count"]
+    edit_parser = subparsers.add_parser('edit', help="Edit a campaign")
+    edit_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
+    edit_parser.add_argument("-m", "--message", help="message template")
+    edit_parser.add_argument("-n", "--name", help="Campaign name")
+    edit_parser.add_argument("-s", "--strategy_type", help="Strategy type")
     
-    # returns followers_count if user id if passed
-    def followers_count_id(self, user_id):
-        return self.api.get_user(user_id)._json["followers_count"]
+    continue_parser = subparsers.add_parser('continue', help="continue all started campaigns")
 
-    def followers_info(self, user_id):
-        follower_id = []
-        follower_name = []
-        follower_followers = []
-        follower_friends = []
-        # index = 0
-        for follow_obj in tweepy.Cursor(self.api.followers, id=user_id).items():
-            follower_id.append(follow_obj._json["id"])
-            follower_name.append(follow_obj._json["name"])
-            follower_followers.append(follow_obj._json["followers_count"])
-            follower_friends.append(follow_obj._json["friends_count"])
-            # if index >= 1:
-            #     break
-            # index = index + 1
-        return follower_id, follower_name, follower_followers, follower_friends
+    return parser.parse_args()
 
-    def get_ranks_from_follower_followers(self, user_id):
-        ranked_followers = []
-        follower_ids, follower_names, follower_followers, _ = self.followers_info(user_id)
-        [ranked_followers for _,ranked_followers in sorted(zip(follower_followers,follower_ids))]
-        return ranked_followers
+def pretty_print_list(campaigns):
 
-    def get_ranks_from_follower_friends(self, user_id):
-        ranked_followers = []
-        follower_ids, follower_names, _, follower_friends = self.followers_info(user_id)
-        [ranked_followers for _,ranked_followers in sorted(zip(follower_friends,follower_ids))]
-        return ranked_followers
-    
-    def get_tweet_info(api, tweet_id):
-        return api.get_status(tweet_id)._json
+    data = [ (i["id"], i["name"], i["strategy"], i["started"], i["message"], ) for i in campaigns]
+    print(tabulate(data, headers=["Id", "Campaign Name", "Strategy", "Started", "Message Template"]))
+    print()
+    print("Fetched {} campaigns".format(len(data)))
 
-    def get_tweets(self, user_id):
-        tweets_id = []
-        tweet_created_time = []
-        for x in tweepy.Cursor(self.api.user_timeline, id = user_id).items():
-            tweets_id.append(x._json['id_str'])
-            tweet_created_time.append(parse(x._json['created_at']).date())
-        return tweets_id, tweet_created_time
+def pretty_print_status(cp, status):
 
-    # returns tweets upton certain timestamp say for 180 days from current date
-    def get_certain_tweets(self, user_id, from_time = datetime.datetime.now().date() ,duration = 180 ):
-        # print(from_time)
-        tweets_id = []
-        tweet_created_time = []
-        for x in tweepy.Cursor(self.api.user_timeline, id = user_id).items():
-            created_time = parse(x._json['created_at']).date()
-            if (from_time - created_time).days <= duration:
-                tweets_id.append(x._json['id_str'])
-                tweet_created_time.append(created_time)
-            else:
-                break
-        return tweets_id, tweet_created_time
+    print("Campaign Name: ", cp["name"])
+    print("Active: ", cp["started"])
+    print("Status: ", status["sent"], "/", status["total"], "(Completed)" if status["total"] == status["sent"] else "")
 
-    def get_retweeters(self, tweet_id):
-        return self.api.retweeters(tweet_id)
-
-    def get_ranks_from_retweets(self, user_id):
-        rank_followers = {}
-        tweets, time = self.get_tweets(user_id)
-        for x in tweets:
-            for y in self.get_retweeters(x):
-                if y in rank_followers:
-                    rank_followers[y] = rank_followers[y] + 1
-                else:
-                    rank_followers[y] = 1
-        return rank_followers
-
-    def send_dm(self, user_id, message):
-        self.api.send_direct_message(user_id, message)
-
-    def send_mass_dm(self, message, followers_list_with_ids, specificMessageObj = {}):
-        for user in followers_list_with_ids:
-            self.send_dm(user, message)
-
-
-class Campaign():
-    def __init__(self, db, collection):
-        self.db = db
-        self.collection = collection
-
-    def create_new_campaign(self, username, name, strategy, followers):
-        doc = {}
-        doc["username"] = username
-        doc["name"] = name
-        doc["strategy"] = strategy
-        doc["followers"] = followers
-        elem = self.collection.find({}, {"name": name})
-        x = self.collection.insert_one(doc)
     
 if __name__ == "__main__":
-    campaign.create_new_campaign("test", "followers")
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-u", "--twitter_username", required=True, help="Your twitter username")
-    parser.add_argument("-n", "--campaign_name", help="Campaign name")
-    parser.add_argument("-s", "--strategy_type", help="Strategy type")
-    parser.add_argument("-i", action='store_true')
-    parser.add_argument("-f", action='store_true')
-    parser.add_argument("-c", action='store_true')
-    parser.add_argument("-t", action='store_true')
-    parser.add_argument("-o", action='store_true')
-    parser.add_argument("-r", action='store_true')
-    arguments = parser.parse_args()
-    
-    # initialize the Chakra engine
-    chakraInstance = Chakra(auth)
+    arguments = parse_arguments()
+    command  = arguments.command
 
-    # Initialize the Campaign model
     campaign = Campaign(db, campaignCollection)
+    chakraInstance = Chakra(auth)
+    pp = not (arguments.format and arguments.format == "json")
 
-    user_id = chakraInstance.get_id(arguments.twitter_username)
+    # print banner
+    if pp:
+        print("    Twitter Campaigns CLI v0.1")
+        print("    ==========================")
+        print()
 
-    if (arguments.campaign_name):
-        if (arguments.strategy_type):
-            if arguments.strategy_type == STRATEGY_TWEETS:
-                followers = chakraInstance.get_ranks_from_retweets(user_id)
-                campaign.create_new_campaign(arguments.twitter_username, arguments.campaign_name, arguments.strategy_type, followers)
-            if arguments.strategy_type == STRATEGY_FOLLOWERS:
-                followers = chakraInstance.get_ranks_from_follower_followers(user_id)
-                campaign.create_new_campaign(arguments.twitter_username, arguments.campaign_name, arguments.strategy_type, followers)
-            if arguments.strategy_type == STRATEGY_FRIENDS:
-                followers = chakraInstance.get_ranks_from_follower_friends(user_id)
-                campaign.create_new_campaign(arguments.twitter_username, arguments.campaign_name, arguments.strategy_type, followers)
+    if command == "add":
+        # add command
+        pp and print("[+] Authenticating.....", end='')
+        me = chakraInstance.get_me()
+        user_id = me["id"]
+        print("Authenticated as", me["name"])
+
+        print("[+] Making a new campaign with name `{}` and id `{}`".format(arguments.name, arguments.id))
+
+        if (campaign.id_exists(arguments.id)):
+            pp and print("[!] Campaign with same ID already exists")
+            pp and print("[!] Failure")
+            exit(1)
+
+        # TODO: Check if same id exists
+
+        if arguments.strategy_type == STRATEGY_TWEETS:
+            pp and print("[+] Strategy set to 'User with most retweets first'")
+            pp and print("[+] Fetching followers.....", end='')
+            followers = chakraInstance.get_ranks_from_retweets(user_id)
+            pp and print("fetched {} followers".format(len(followers)))
+            campaign.create_new_campaign(arguments.id, arguments.name, arguments.strategy_type, followers, False, arguments.message)
+            pp and print("[+] Success")
+        elif arguments.strategy_type == STRATEGY_FOLLOWERS:
+            pp and print("[+] Strategy set to 'User with most followers first'")
+            pp and print("[+] Fetching followers.....", end='')
+            followers = chakraInstance.get_ranks_from_follower_followers(user_id)
+            pp and print("fetched {} followers".format(len(followers)))
+            campaign.create_new_campaign(arguments.id, arguments.name, arguments.strategy_type, followers, False, arguments.message)
+            pp and print("[+] Success")
+        elif arguments.strategy_type == STRATEGY_FRIENDS:
+            pp and print("[+] Strategy set to 'User with most friends first'")
+            pp and print("[+] Fetching followers.....", end='')
+            followers = chakraInstance.get_ranks_from_follower_friends(user_id)
+            pp and print("fetched {} followers".format(len(followers)))
+            campaign.create_new_campaign(arguments.id, arguments.name, arguments.strategy_type, followers, False, arguments.message)
+            pp and print("[+] Success")
         else:
-            print("Strategy type not given")
+            pp and print("invalid strategy")
 
-    if (arguments.i):
-        print(user_id)
+    elif command == "start":
+        # TODO: This is just an alias for daemonized DM Loop with check for campaign if its still active
+        if not (campaign.id_exists(arguments.id)):
+            pp and print("[!] No such campaign exists!")
+            exit(1)
 
-    if (arguments.f):
-        print(chakraInstance.followers_info(user_id))
-    
-    if (arguments.c):
-        print(chakraInstance.followers_count_id(user_id))
+        cp = campaign.get_campaign(arguments.id)
+        
+        if (cp["started"]):
+            print("[+] Campaign Already Started")
+            exit(1)
+        
+        campaign.start_campaign(arguments.id)
+        pp and print("[+] Starting campaign `{}`".format(cp["name"]))
 
-    if (arguments.t):
-        print(chakraInstance.get_ranks_from_retweets(user_id))
-    elif (arguments.o):
-        print(chakraInstance.get_ranks_from_follower_followers(user_id))
-    elif (arguments.r):
-        print(chakraInstance.get_ranks_from_follower_friends(user_id))
+        n = os.fork()
+        if n == 0 and pp:
+            print("[+] Daemonized with PID", os.getpid())
+        elif pp:
+            print("[+] Success")
 
+        if n == 0:
+            # pymongo is fork-unsafe
+            mongoClient = pymongo.MongoClient("mongodb://localhost:27017/")
+            db = mongoClient[DB_NAME]
+            campaignCollection = db[COLLECTION_NAME]
+            campaign = Campaign(db, campaignCollection)
+
+            recipients = cp["followers"]
+            for r in recipients:
+                if not campaign.is_started(cp["id"]):
+                    exit(0)
+
+                if r["sent"] == False:
+                    user = chakraInstance.get_user_json(r["id"])
+                    chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
+                    campaign.mark_sent(arguments.id, user["id"])
+                
+            campaign.stop_campaign(cp["id"])
+
+    elif command == "status":
+        # status command
+        status = campaign.get_status(arguments.id)
+        if not pp:
+            print(json.dumps(status))
+        else:
+            cp = campaign.get_campaign(arguments.id)
+            pretty_print_status(cp, status)
+
+    elif command == "delete":
+        # delete command
+        if arguments.id:
+            if (campaign.id_exists(arguments.id)):
+                print("[+] Deleting campaign with id", arguments.id)
+                campaign.delete(arguments.id)
+                print("[+] Success")
+            else:
+                pp and print("[!] No such campaign exists")
+                exit(1)
+
+        elif arguments.all:
+            pp and print("[+] Deleting all campaigns....")
+            campaign.truncate()
+            pp and print("[+] Success")
+
+        else:
+            print("[!] Specify either id of campaign or `-a` to delete all campaigns")
+            exit(1)
+
+    elif command == "dm":
+        if not (campaign.id_exists(arguments.id)):
+            pp and print("[!] No such campaign exists!")
+            exit(1)
+
+        cp = campaign.get_campaign(arguments.id)
+        campaign.start_campaign(arguments.id)
+        pp and print("[+] Starting campaign `{}`".format(cp["name"]))
+
+        n = 0
+        if arguments.daemonize:
+            n = os.fork()
+            if n == 0 and pp:
+                print("[+] Daemonized with PID", os.getpid())
+            elif pp:
+                print("[+] Success")
+
+
+        if n == 0:
+            # pymongo is fork-unsafe
+            mongoClient = pymongo.MongoClient("mongodb://localhost:27017/")
+            db = mongoClient[DB_NAME]
+            campaignCollection = db[COLLECTION_NAME]
+            campaign = Campaign(db, campaignCollection)
+
+            if (arguments.recipients == "all"):
+                recipients = cp["followers"]
+                for r in recipients:
+                    if not campaign.is_started(cp["id"]):
+                        exit(0)
+
+                    if r["sent"] == False:
+                        user = chakraInstance.get_user_json(r["id"])
+                        chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
+                        campaign.mark_sent(arguments.id, user["id"])
+            else:
+                recipients = ast.literal_eval(arguments.recipients)
+                for r in recipients:
+                    if not campaign.is_started(cp["id"]):
+                        exit(0)
+           
+                    user = chakraInstance.get_user_json(r)
+                    chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
+                    campaign.mark_sent(arguments.id, user["id"])
+
+        if not arguments.daemonize:
+            print("[+] Success")
+
+    elif command == "list":
+        # list command
+        all_campaigns = [i for i in campaign.list_all()]
+        if not pp:
+            print(all_campaigns)
+        else:
+            pretty_print_list(all_campaigns)
+
+    elif command == "reset":
+        if not (campaign.id_exists(arguments.id)):
+            pp and print("[!] No such campaign exists!")
+            exit(1)
+
+        campaign.reset_sent(arguments.id)
+        pp and print("[+] Success")
+
+    elif command == "stop":
+        if not (campaign.id_exists(arguments.id)):
+            pp and print("[!] No such campaign exists!")
+            exit(1)
+
+        campaign.stop_campaign(arguments.id)
+
+    elif command == "edit":
+        if not (campaign.id_exists(arguments.id)):
+            pp and print("[!] No such campaign exists!")
+            exit(1)
+        
+        if (arguments.name):
+            campaign.edit_name(arguments.id, arguments.name)
+        
+        if (arguments.message):
+            campaign.edit_message(arguments.id, arguments.message)
+
+    elif command == "continue":
+        # continue command
+        for cp in campaign.list_all_started_with_followers():
+            n = os.fork()
+            if n == 0:
+                # pymongo is fork-unsafe
+                cp2 = cp
+                mongoClient = pymongo.MongoClient("mongodb://localhost:27017/")
+                db = mongoClient[DB_NAME]
+                campaignCollection = db[COLLECTION_NAME]
+                campaigni = Campaign(db, campaignCollection)
+
+                recipients = cp2["followers"]
+                for r in recipients:
+                    if not campaigni.is_started(cp2["id"]):
+                        exit(0)
+
+                    if r["sent"] == False:
+                        user = chakraInstance.get_user_json(r["id"])
+                        chakraInstance.send_dm(user["id"], interpolate(cp2["message"], user))
+                        campaigni.mark_sent(cp2["id"], user["id"])
+                    
+                campaigni.stop_campaign(cp2["id"])
+                exit(0)
+                
+
+    else:
+        print("[!] No command specified")
+        exit(1)
+
+
+    sys.exit(0)
