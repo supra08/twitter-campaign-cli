@@ -89,6 +89,8 @@ def parse_arguments():
     edit_parser.add_argument("-m", "--message", help="message template")
     edit_parser.add_argument("-n", "--name", help="Campaign name")
     edit_parser.add_argument("-s", "--strategy_type", help="Strategy type")
+    
+    continue_parser = subparsers.add_parser('continue', help="continue all started campaigns")
 
     return parser.parse_args()
 
@@ -197,6 +199,8 @@ if __name__ == "__main__":
                     user = chakraInstance.get_user_json(r["id"])
                     chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
                     campaign.mark_sent(arguments.id, user["id"])
+                
+            campaign.stop_campaign(cp["id"])
 
     elif command == "status":
         # status command
@@ -308,6 +312,32 @@ if __name__ == "__main__":
         
         if (arguments.message):
             campaign.edit_message(arguments.id, arguments.message)
+
+    elif command == "continue":
+        # continue command
+        for cp in campaign.list_all_started_with_followers():
+            n = os.fork()
+            if n == 0:
+                # pymongo is fork-unsafe
+                cp2 = cp
+                mongoClient = pymongo.MongoClient("mongodb://localhost:27017/")
+                db = mongoClient[DB_NAME]
+                campaignCollection = db[COLLECTION_NAME]
+                campaigni = Campaign(db, campaignCollection)
+
+                recipients = cp2["followers"]
+                for r in recipients:
+                    if not campaigni.is_started(cp2["id"]):
+                        exit(0)
+
+                    if r["sent"] == False:
+                        user = chakraInstance.get_user_json(r["id"])
+                        chakraInstance.send_dm(user["id"], interpolate(cp2["message"], user))
+                        campaigni.mark_sent(cp2["id"], user["id"])
+                    
+                campaigni.stop_campaign(cp2["id"])
+                exit(0)
+                
 
     else:
         print("[!] No command specified")

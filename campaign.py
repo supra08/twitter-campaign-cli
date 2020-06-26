@@ -42,6 +42,10 @@ class Campaign():
     def list_all(self):
         l = self.collection.find({}, { "_id": 0, "id": 1, "name": 1, "strategy": 1, "started": 1, "message": 1 })
         return l
+    
+    def list_all_started_with_followers(self):
+        l = self.collection.find({ "started": True }, { "_id": 0, "id": 1, "message": 1, "followers": 1 })
+        return l
 
     def get_campaign(self, id):
         c = self.collection.find_one({ "id": id })
