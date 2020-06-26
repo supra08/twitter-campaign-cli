@@ -44,12 +44,12 @@ class Chakra():
 
     def get_ranks_from_follower_followers(self, user_id):
         follower_ids, follower_names, follower_followers, _ = self.followers_info(user_id)
-        ranked_followers = [ { "id": fol, "sent": False } for _, fol in sorted(zip(follower_followers,follower_ids))]
+        ranked_followers = [ { "id": fol, "sent": False } for _, fol in sorted(zip(follower_followers,follower_ids), reverse=True)]
         return ranked_followers
 
     def get_ranks_from_follower_friends(self, user_id):
         follower_ids, follower_names, _, follower_friends = self.followers_info(user_id)
-        ranked_followers = [ { "id": fol, "sent": False } for _, fol in sorted(zip(follower_friends,follower_ids)) ]
+        ranked_followers = [ { "id": fol, "sent": False } for _, fol in sorted(zip(follower_friends,follower_ids), reverse=True) ]
         return ranked_followers
     
     def get_tweet_info(api, tweet_id):
