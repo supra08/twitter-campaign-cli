@@ -22,6 +22,9 @@ load_dotenv(dotenv_path=env_path)
 
 DB_NAME = "chakra"
 COLLECTION_NAME = "campaigns"
+if os.getenv("TCGUI") == "YES":
+    COLLECTION_NAME = "campaigns-gui"
+
 STRATEGY_TWEETS = "tweet"
 STRATEGY_FRIENDS = "friend"
 STRATEGY_FOLLOWERS = "follower"
