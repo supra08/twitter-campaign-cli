@@ -1,5 +1,6 @@
 import tweepy
 import datetime
+from dateutil.parser import parse
 
 class Chakra():
     
@@ -52,7 +53,7 @@ class Chakra():
         ranked_followers = [ { "id": fol, "sent": False } for _, fol in sorted(zip(follower_friends,follower_ids), reverse=True) ]
         return ranked_followers
     
-    def get_tweet_info(api, tweet_id):
+    def get_tweet_info(self, api, tweet_id):
         return api.get_status(tweet_id)._json
 
     def get_tweets(self, user_id):
