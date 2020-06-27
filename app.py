@@ -43,12 +43,9 @@ class AuthConfig():
 
 # authConfig = authConfig()
 
-# @app.route('/')
-# def homepage():
-#     user = session.get('user')
-#     return jsonify(
-#         status="success"
-#     )
+@app.route('/')
+def homepage():
+    return "<h1>Welcome to Geeks for Geeks</h1>"
 
 @app.route("/request_token")
 def request_oauth_token():
@@ -220,7 +217,7 @@ def delete_campaign():
 ##################################################################################
 
 if __name__ == "__main__":
-    app.run()
+    app.run(threaded=True, port=5000)
 
 
 
