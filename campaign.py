@@ -66,3 +66,7 @@ class Campaign():
 
     def edit_message(self, id, message):
         self.collection.update_one( { "id": id }, { "$set": { "message": message } } )
+    
+    def get_followers(self, id):
+        l = self.collection.find_one({ "id": id }, { "_id": 0,  "followers": 1 })
+        return l["followers"]

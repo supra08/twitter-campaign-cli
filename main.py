@@ -80,6 +80,9 @@ def parse_arguments():
 
     reset_parser = subparsers.add_parser('reset', help="Reset a campaign")
     reset_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
+    
+    followers_parser = subparsers.add_parser('followers', help="get followers of a campaign")
+    followers_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
 
     stop_parser = subparsers.add_parser('stop', help="Stop a campaign")
     stop_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
@@ -338,6 +341,15 @@ if __name__ == "__main__":
                 campaigni.stop_campaign(cp2["id"])
                 exit(0)
                 
+    elif command == "followers":
+        if not (campaign.id_exists(arguments.id)):
+            pp and print("[!] No such campaign exists!")
+            exit(1)
+        
+        if pp:
+            print("hello")
+        else:
+            print(json.dumps(campaign.get_followers(arguments.id)))
 
     else:
         print("[!] No command specified")

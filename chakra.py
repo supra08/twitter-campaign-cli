@@ -31,25 +31,27 @@ class Chakra():
         follower_name = []
         follower_followers = []
         follower_friends = []
+        follower_handles = []
         # index = 0
         for follow_obj in tweepy.Cursor(self.api.followers, id=user_id).items():
             follower_id.append(follow_obj._json["id"])
             follower_name.append(follow_obj._json["name"])
             follower_followers.append(follow_obj._json["followers_count"])
             follower_friends.append(follow_obj._json["friends_count"])
+            follower_handles.append(follow_obj._json["screen_name"])
             # if index >= 1:
             #     break
             # index = index + 1
-        return follower_id, follower_name, follower_followers, follower_friends
+        return follower_id, follower_name, follower_handles, follower_followers, follower_friends
 
     def get_ranks_from_follower_followers(self, user_id):
-        follower_ids, follower_names, follower_followers, _ = self.followers_info(user_id)
-        ranked_followers = [ { "id": fol, "sent": False } for _, fol in sorted(zip(follower_followers,follower_ids), reverse=True)]
+        follower_ids, follower_names, follower_handles, follower_followers, _ = self.followers_info(user_id)
+        ranked_followers = [ { "id": fol, "sent": False, "count": r, "name": n, "handle": h } for r, fol, n, h in sorted(zip(follower_followers,follower_ids,follower_names,follower_handles), reverse=True)]
         return ranked_followers
 
     def get_ranks_from_follower_friends(self, user_id):
-        follower_ids, follower_names, _, follower_friends = self.followers_info(user_id)
-        ranked_followers = [ { "id": fol, "sent": False } for _, fol in sorted(zip(follower_friends,follower_ids), reverse=True) ]
+        follower_ids, follower_names, follower_handles, _, follower_friends = self.followers_info(user_id)
+        ranked_followers = [ { "id": fol, "sent": False, "count": r, "name": n, "handle": h  } for r, fol, n, h in sorted(zip(follower_friends,follower_ids,follower_names,follower_handles), reverse=True) ]
         return ranked_followers
     
     def get_tweet_info(api, tweet_id):
