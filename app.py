@@ -15,8 +15,8 @@ except ImportError:
 import os
 from flask_cors import CORS
 
-ConsumerKey= os.getenv("ConsumerKey")
-ConsumerSecret= os.getenv("ConsumerSecret")
+ConsumerKey= "R0NPs11ho2sfJ3dY0Ud4lLcwp"
+ConsumerSecret= "PFY2CS81FWlkst5WQc519EG8rnYptoGj8vtWmGzot532qy3BbF"
 TWITTER_REQUEST_TOKEN_URL = "https://api.twitter.com/oauth/request_token"
 TWITTER_ACCESS_TOKEN_URL = "https://api.twitter.com/oauth/access_token"
 
@@ -50,7 +50,7 @@ def homepage():
 @app.route("/request_token")
 def request_oauth_token():
     request_token = OAuth1Session(
-        client_key=ConsumerKey, client_secret=ConsumerSecret, callback_uri="http://localhost:3000/"
+        client_key=ConsumerKey, client_secret=ConsumerSecret, callback_uri="https://twicamp.herokuapp.com/"
     )
     data = request_token.get(TWITTER_REQUEST_TOKEN_URL)
     if data.status_code == 200:
