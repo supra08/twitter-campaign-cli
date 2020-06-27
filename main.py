@@ -16,12 +16,15 @@ import time
 
 from chakra import Chakra
 from campaign import Campaign
+from user import User
+
 ####### Setup Division #######
 env_path = Path('.') / '.env'
 load_dotenv(dotenv_path=env_path)
 
 DB_NAME = "chakra"
 COLLECTION_NAME = "campaigns"
+USER_COLLECTION = "users"
 if os.getenv("TCGUI") == "YES":
     COLLECTION_NAME = "campaigns-gui"
 
@@ -34,6 +37,7 @@ mongoClient = pymongo.MongoClient("mongodb://localhost:27017/")
 # if DB_NAME not in mongoClient.list_database_names():
 db = mongoClient[DB_NAME]
 campaignCollection = db[COLLECTION_NAME]
+userCollection = db[USER_COLLECTION]
 
 
 ConsumerKey = os.getenv("ConsumerKey")
@@ -115,6 +119,15 @@ if __name__ == "__main__":
     campaign = Campaign(db, campaignCollection)
     chakraInstance = Chakra(auth)
     pp = not (arguments.format and arguments.format == "json")
+    me = chakraInstance.get_me()
+    user_id = me["id"]
+
+    user = User(db, userCollection)
+    if (user.find_user(user_id) != None):
+        user.delete_user(user_id)
+        user.create_new_user(AccessKey, AccessSecret, user_id)
+    else:
+        user.create_new_user(AccessKey, AccessSecret, user_id)
 
     # print banner
     if pp:
@@ -125,8 +138,6 @@ if __name__ == "__main__":
     if command == "add":
         # add command
         pp and print("[+] Authenticating.....", end='')
-        me = chakraInstance.get_me()
-        user_id = me["id"]
         print("Authenticated as", me["name"])
 
         print("[+] Making a new campaign with name `{}` and id `{}`".format(arguments.name, arguments.id))
@@ -143,7 +154,7 @@ if __name__ == "__main__":
             pp and print("[+] Fetching followers.....", end='')
             followers = chakraInstance.get_ranks_from_retweets(user_id)
             pp and print("fetched {} followers".format(len(followers)))
-            campaign.create_new_campaign(arguments.id, arguments.name, arguments.strategy_type, followers, False, arguments.message)
+            campaign.create_new_campaign(arguments.id, arguments.name, arguments.strategy_type, followers, False, arguments.message, user_id)
             pp and print("[+] Success")
         elif arguments.strategy_type == STRATEGY_FOLLOWERS:
             pp and print("[+] Strategy set to 'User with most followers first'")
@@ -281,7 +292,7 @@ if __name__ == "__main__":
 
     elif command == "list":
         # list command
-        all_campaigns = [i for i in campaign.list_all()]
+        all_campaigns = [i for i in campaign.list_all(user_id)]
         if not pp:
             print(all_campaigns)
         else:
@@ -315,7 +326,7 @@ if __name__ == "__main__":
 
     elif command == "continue":
         # continue command
-        for cp in campaign.list_all_started_with_followers():
+        for cp in campaign.list_all_started_with_followers(user_id):
             n = os.fork()
             if n == 0:
                 # pymongo is fork-unsafe

@@ -3,7 +3,7 @@ class Campaign():
         self.db = db
         self.collection = collection
 
-    def create_new_campaign(self, id, name, strategy, followers, started, message):
+    def create_new_campaign(self, id, name, strategy, followers, started, message, user_id):
         doc = {}
         doc["id"] = id
         doc["name"] = name
@@ -11,6 +11,7 @@ class Campaign():
         doc["followers"] = followers
         doc["started"] = started
         doc["message"] = message
+        doc["user_id"] = user_id
         elem = self.collection.find({}, {"name": name})
         x = self.collection.insert_one(doc)
         
@@ -39,12 +40,12 @@ class Campaign():
     def delete(self, id):
         self.collection.delete_one({ "id": id })
 
-    def list_all(self):
-        l = self.collection.find({}, { "_id": 0, "id": 1, "name": 1, "strategy": 1, "started": 1, "message": 1 })
+    def list_all(self, user_id):
+        l = self.collection.find({ "user_id": user_id }, { "_id": 0, "id": 1, "name": 1, "strategy": 1, "started": 1, "message": 1, "user_id": 1 })
         return l
     
-    def list_all_started_with_followers(self):
-        l = self.collection.find({ "started": True }, { "_id": 0, "id": 1, "message": 1, "followers": 1 })
+    def list_all_started_with_followers(self, user_id):
+        l = self.collection.find({ "started": True, "user_id": user_id }, { "_id": 0, "id": 1, "message": 1, "followers": 1 })
         return l
 
     def get_campaign(self, id):

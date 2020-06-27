@@ -5,8 +5,9 @@ import oauth2, hmac, hashlib, urllib, urllib3
 from requests_oauthlib import OAuth1Session
 from campaign import Campaign
 from chakra import Chakra
+from user import User
 import tweepy
-from main import db, campaignCollection
+from main import db, campaignCollection, userCollection
 try:
     from urllib.parse import urlparse
 except ImportError:
@@ -24,12 +25,10 @@ cors = CORS(app)
 
 request_token = {}
 
-AccessKey = ""
-AccessSecret = ""
-
 campaign = Campaign(db, campaignCollection)
+user = User(db, userCollection)
 
-class authConfig():
+class AuthConfig():
     def __init__(self):
         self.ChakraInstance = ''
 
@@ -42,14 +41,14 @@ class authConfig():
     def del_chakra(self):
         del self.ChakraInstance
 
-authConfig = authConfig()
+# authConfig = authConfig()
 
-@app.route('/')
-def homepage():
-    user = session.get('user')
-    return jsonify(
-        status="success"
-    )
+# @app.route('/')
+# def homepage():
+#     user = session.get('user')
+#     return jsonify(
+#         status="success"
+#     )
 
 @app.route("/request_token")
 def request_oauth_token():
@@ -81,17 +80,24 @@ def request_access_token():
     data = {"oauth_verifier": request.args.get("oauth_verifier")}
     response = oauth_token.post(TWITTER_ACCESS_TOKEN_URL, data=data)
     access_token = str.split(response.text, '&')
-    global AccessKey, AccessSecret
     AccessKey = str.split(access_token[0], '=')[1]
     AccessSecret = str.split(access_token[1], '=')[1]
+    user_id = str.split(access_token[2], '=')[1]
     screen_name = str.split(access_token[3], '=')[1]
+    if (user.find_user(user_id) != None):
+        user.delete_user(user_id)
+        user.create_new_user(AccessKey, AccessSecret, user_id)
+    else:
+        user.create_new_user(AccessKey, AccessSecret, user_id)
+    # user.create_new_user(AccessKey, AccessSecret, user_id)
     auth = tweepy.OAuthHandler(ConsumerKey, ConsumerSecret)
     auth.set_access_token(AccessKey, AccessSecret)
-    global authConfig
+    authConfig = AuthConfig()
     authConfig.set_chakra(auth)
     chakraInstance = authConfig.get_chakra()
     me = chakraInstance.get_me()
     return jsonify(
+        user_id=user_id,
         screen_name=screen_name,
         me=me,
         status="success"
@@ -99,9 +105,8 @@ def request_access_token():
 
 @app.route('/logout')
 def logout():
-    global AccessKey, AccessSecret, authConfig
-    AccessKey = ""
-    AccessSecret = ""
+    user_id = request.args.get('user_id')
+    user.delete_user(user_id)
     return jsonify(
         status="true"
     )
@@ -109,8 +114,9 @@ def logout():
 
 @app.route('/campaigns', methods=['GET'])
 def get_campaigns():
-    campaign_list = campaign.list_all()
-    all_campaigns = [i for i in campaign.list_all()]
+    user_id = request.args.get('user_id')
+    campaign_list = campaign.list_all(user_id)
+    all_campaigns = [i for i in campaign_list]
     return jsonify(
         status="success",
         campaign_list=all_campaigns
@@ -121,13 +127,24 @@ def create_campaign():
     req = request.get_json()
     name = req['name']
     id = req['id']
+    user_id = req['user_id']
     strategy = req['strategy']
+    userObj = user.find_user(user_id)
+    if (userObj == None):
+        return jsonify(
+            status="failed"
+        )
+    auth = tweepy.OAuthHandler(ConsumerKey, ConsumerSecret)
+    auth.set_access_token(userObj['access_key'], userObj['access_secret'])
+    authConfig = AuthConfig()
+    authConfig.set_chakra(auth)
     chakraInstance = authConfig.get_chakra()
-    followers = chakraInstance.get_ranks_from_retweets(id)
-    # followers = []
-    started = req['started']
+    # chakraInstance = authConfig.get_chakra()
+    # followers = chakraInstance.get_ranks_from_retweets(id)
+    followers = []
+    started = True
     message = req['message']
-    campaign.create_new_campaign(id, name, strategy, followers, started, message)
+    campaign.create_new_campaign(id, name, strategy, followers, started, message, user_id)
     return jsonify(
         status="success",
     )
@@ -152,8 +169,7 @@ def stop_campaign():
 
 @app.route('/campaign', methods=['GET'])
 def get_campaign():
-    req = request.args.get('id')
-    id = req['id']
+    id = request.args.get('id')
     campaignInfo = campaign.get_campaign(id)
     return jsonify(
         campaign_info=campaignInfo,
