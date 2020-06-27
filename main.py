@@ -80,6 +80,9 @@ def parse_arguments():
 
     reset_parser = subparsers.add_parser('reset', help="Reset a campaign")
     reset_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
+    
+    followers_parser = subparsers.add_parser('followers', help="get followers of a campaign")
+    followers_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
 
     stop_parser = subparsers.add_parser('stop', help="Stop a campaign")
     stop_parser.add_argument("-i", "--id", help="Campaign ID", required=True)
@@ -237,47 +240,21 @@ if __name__ == "__main__":
             exit(1)
 
         cp = campaign.get_campaign(arguments.id)
-        campaign.start_campaign(arguments.id)
-        pp and print("[+] Starting campaign `{}`".format(cp["name"]))
 
-        n = 0
-        if arguments.daemonize:
-            n = os.fork()
-            if n == 0 and pp:
-                print("[+] Daemonized with PID", os.getpid())
-            elif pp:
-                print("[+] Success")
-
-
-        if n == 0:
-            # pymongo is fork-unsafe
-            mongoClient = pymongo.MongoClient("mongodb://localhost:27017/")
-            db = mongoClient[DB_NAME]
-            campaignCollection = db[COLLECTION_NAME]
-            campaign = Campaign(db, campaignCollection)
-
-            if (arguments.recipients == "all"):
-                recipients = cp["followers"]
-                for r in recipients:
-                    if not campaign.is_started(cp["id"]):
-                        exit(0)
-
-                    if r["sent"] == False:
-                        user = chakraInstance.get_user_json(r["id"])
-                        chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
-                        campaign.mark_sent(arguments.id, user["id"])
-            else:
-                recipients = ast.literal_eval(arguments.recipients)
-                for r in recipients:
-                    if not campaign.is_started(cp["id"]):
-                        exit(0)
-           
-                    user = chakraInstance.get_user_json(r)
+        if (arguments.recipients == "all"):
+            recipients = cp["followers"]
+            for r in recipients:
+                if r["sent"] == False:
+                    user = chakraInstance.get_user_json(r["id"])
                     chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
                     campaign.mark_sent(arguments.id, user["id"])
+        else:
+            recipients = ast.literal_eval(arguments.recipients)
+            for r in recipients:
+                user = chakraInstance.get_user_json(r)
+                chakraInstance.send_dm(user["id"], interpolate(cp["message"], user))
+                campaign.mark_sent(arguments.id, user["id"])
 
-        if not arguments.daemonize:
-            print("[+] Success")
 
     elif command == "list":
         # list command
@@ -338,6 +315,15 @@ if __name__ == "__main__":
                 campaigni.stop_campaign(cp2["id"])
                 exit(0)
                 
+    elif command == "followers":
+        if not (campaign.id_exists(arguments.id)):
+            pp and print("[!] No such campaign exists!")
+            exit(1)
+        
+        if pp:
+            print("hello")
+        else:
+            print(json.dumps(campaign.get_followers(arguments.id)))
 
     else:
         print("[!] No command specified")
