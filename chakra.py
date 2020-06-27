@@ -91,7 +91,19 @@ class Chakra():
                     rank_followers[y] = rank_followers[y] + 1
                 else:
                     rank_followers[y] = 1
-        return rank_followers
+        
+        count = list(rank_followers.values())
+        id = list(rank_followers.keys())
+        name = []
+        handle = []
+        
+        for user_id in id:
+          user_obj = self.api.get_user(user_id)
+          name.append(user_obj._json['name'])
+          handle.append(user_obj._json['screen_name'])
+        
+        ranked_list = [ { "id": fol, "sent": False, "count": r, "name": n, "handle": h  } for r, fol, n, h in sorted(zip(count,id,name,handle), reverse=True) ]
+        return ranked_list
 
     def send_dm(self, user_id, message):
         self.api.send_direct_message(user_id, message)
