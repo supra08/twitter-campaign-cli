@@ -32,7 +32,7 @@ STRATEGY_TWEETS = "tweet"
 STRATEGY_FRIENDS = "friend"
 STRATEGY_FOLLOWERS = "follower"
 
-mongoClient = pymongo.MongoClient("mongodb://supra:1998sincosten@ds035543.mlab.com:35543/twicamp")
+mongoClient = pymongo.MongoClient("mongodb://127.0.0.1:27017")
 
 # if DB_NAME not in mongoClient.list_database_names():
 db = mongoClient[DB_NAME]
