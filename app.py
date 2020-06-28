@@ -15,8 +15,8 @@ except ImportError:
 import os
 from flask_cors import CORS
 
-ConsumerKey= "R0NPs11ho2sfJ3dY0Ud4lLcwp"
-ConsumerSecret= "PFY2CS81FWlkst5WQc519EG8rnYptoGj8vtWmGzot532qy3BbF"
+ConsumerKey = os.getenv("ConsumerKey")
+ConsumerSecret = os.getenv("ConsumerSecret")
 TWITTER_REQUEST_TOKEN_URL = "https://api.twitter.com/oauth/request_token"
 TWITTER_ACCESS_TOKEN_URL = "https://api.twitter.com/oauth/access_token"
 
