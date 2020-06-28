@@ -49,8 +49,11 @@ def homepage():
 
 @app.route("/request_token")
 def request_oauth_token():
+    # request_token = OAuth1Session(
+    #     client_key=ConsumerKey, client_secret=ConsumerSecret, callback_uri="http://ec2-54-161-90-135.compute-1.amazonaws.com:8080/"
+    # )
     request_token = OAuth1Session(
-        client_key=ConsumerKey, client_secret=ConsumerSecret, callback_uri="http://ec2-54-161-90-135.compute-1.amazonaws.com:8080/"
+        client_key=ConsumerKey, client_secret=ConsumerSecret, callback_uri="http://localhost:3000/"
     )
     data = request_token.get(TWITTER_REQUEST_TOKEN_URL)
     if data.status_code == 200:
