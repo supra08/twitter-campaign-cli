@@ -50,7 +50,7 @@ def homepage():
 @app.route("/request_token")
 def request_oauth_token():
     request_token = OAuth1Session(
-        client_key=ConsumerKey, client_secret=ConsumerSecret, callback_uri="https://twicamp.herokuapp.com/"
+        client_key=ConsumerKey, client_secret=ConsumerSecret, callback_uri="http://ec2-54-161-90-135.compute-1.amazonaws.com:5000/"
     )
     data = request_token.get(TWITTER_REQUEST_TOKEN_URL)
     if data.status_code == 200:
@@ -62,10 +62,18 @@ def request_oauth_token():
             "oauth_callback_confirmed": oauth_callback_confirmed,
         }
     else:
-        return {
-            "oauth_token": None,
-            "oauth_callback_confirmed": "false",
-        }
+        request_token = OAuth1Session(
+        client_key=ConsumerKey, client_secret=ConsumerSecret, callback_uri="http://localhost:3000/"
+        )
+        data = request_token.get(TWITTER_REQUEST_TOKEN_URL)
+        if data.status_code == 200:
+            request_token = str.split(data.text, '&')
+            oauth_token = str.split(request_token[0], '=')[1]
+            oauth_callback_confirmed = str.split(request_token[2], '=')[1]
+            return {
+                "oauth_token": oauth_token,
+                "oauth_callback_confirmed": oauth_callback_confirmed,
+            }
 
 @app.route("/access_token")
 def request_access_token():
